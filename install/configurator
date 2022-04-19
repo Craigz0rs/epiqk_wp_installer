@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+function exit_error {
+  printf "$1\n" >&2
+  exit "${2:-1}"
+}
+
+printf "Letting the adults work...\n"
+
+BASENAME=$(basename $PWD)
+printf "Copy starter conf \n"
+cp /etc/apache2/sites-available/starter.conf.tpl /etc/apache2/sites-available/$BASENAME.conf
+printf "Rename site in conf \n"
+sed -i "s/###/$BASENAME/g" /etc/apache2/sites-available/$BASENAME.conf
+printf "Activate site in apache \n"
+cd /etc/apache2/sites-available
+a2ensite $BASENAME.conf 
+printf "Configtests and restart apache \n"
+apachectl configtest && systemctl restart apache2
+
+if [ $? -eq 0 ]; then
+  printf "Apache has been configured and reloaded...\n"
+else
+  exit_error "Error reloading Apache...\n"
+fi
+printf "begin certbot \n"
+certbot --apache
+
+cd /websites/dev/$BASENAME

@@ -1,0 +1,117 @@
+#!/bin/env sh
+
+BASENAME=$(basename $PWD)
+THISFILE="$0"
+
+MYSQLPASS=$(cat ~/.my.mini.cnf 2>/dev/null)
+MYSQLCMD="mysql --user=root --password=$MYSQLPASS "
+
+printf "Let's get this show on the road...\n"
+
+read -p "Base name [$BASENAME]: " PROJECT
+PROJECT=${PROJECT:-"$BASENAME"}
+
+printf $PROJECT"\n"
+
+printf "Configuring development environment...\n"
+
+read -p "Project namespace [$PROJECT]: " PROJNAME
+PROJNAME=${PROJNAME:-"$PROJECT"}
+PROJNAMEUPPER="$(echo $PROJNAME | tr 'a-z' 'A-Z')"
+
+read -p "Site title [$PROJECT]: " SITETITLE
+SITETITLE=${SITETITLE:-"$PROJECT"}
+
+printf $SITETITLE"\n"
+
+BASEURL="https://"$PROJECT".dev.epiqk.io"
+
+read -p "Development URL [$BASEURL]: " SITEURL
+SITEURL=${SITEURL:-"$BASEURL"}
+
+printf $SITEURL"\n"
+
+DBBASE=$(echo $PROJECT | cut -c1-8)
+BASEDBPASS=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
+BASEDBNAME=$DBBASE"_dev"
+BASEDBUSER=$DBBASE"_devusr"
+
+read -p "Database Name [$BASEDBNAME]: " DBNAME
+DBNAME=${DBNAME:-"$BASEDBNAME"}
+
+read -p "Database User [$BASEDBUSER]: " DBUSER
+DBUSER=${DBUSER:-"$BASEDBUSER"}
+
+read -p "Database Password [$BASEDBPASS]: " DBPASS
+DBPASS=${DBPASS:-"$BASEDBPASS"}
+
+printf "Creating database entries...\n"
+$MYSQLCMD -e "CREATE DATABASE IF NOT EXISTS $DBNAME; DROP USER IF EXISTS '$DBUSER'@'%'; CREATE USER IF NOT EXISTS '$DBUSER'@'%' IDENTIFIED BY '$DBPASS'; GRANT ALL PRIVILEGES ON $DBNAME.* TO '$DBUSER'@'%'; FLUSH PRIVILEGES;"
+
+printf "Downloading latest version of WordPress...\n"
+wget https://wordpress.org/latest.tar.gz
+tar -zxvf ./latest.tar.gz
+rm ./latest.tar.gz
+mv ./wordpress ./public_html
+
+printf "Moving plugins...\n"
+mv ./install/mu-plugins ./public_html/wp-content
+
+printf "Running Apache configuration...\n"
+sudo ./install/configurator $PROJECT
+
+printf "Moving into web root directory...\n"
+cd ./public_html
+
+printf "Generating wp-config.php file...\n"
+wp config create --dbname="$DBNAME" --dbuser="$DBUSER" --dbpass="$DBPASS" --dbcharset="utf8" --dbcollate="utf8_unicode_ci"
+mv ./wp-config.php ../
+
+printf "Installing WordPress in "$PWD"\n";
+wp core install --url="$SITEURL" --title="$SITETITLE" --admin_user="cdarcy" --admin_password=$MYSQLPASS --admin_email="cdarcy@live.ca"
+
+wp config set FS_METHOD "'direct'" --raw 
+wp config set FS_CHMOD_DIR "( 0775 & ~ umask() )" --raw
+wp config set FS_CHMOD_FILE "( 0664 & ~ umask() )" --raw
+wp config set DISABLE_WP_CRON true --raw
+
+wp config set EP_GMAPS_KEY ""
+wp config set EP_TYPEKIT_ID ""
+
+printf "Installing WordPress plugins...\n"
+for PLUGIN in ../install/plugins/*.zip; do 
+  wp plugin install $PLUGIN --activate
+done
+
+printf "Updating plugins to latest versions...\n"
+wp plugin update --all
+
+printf "Updating file and folder permissions...\n"
+chmod 775 .
+find . -type d -print0 | xargs -0 chmod 775
+find . -type f -print0 | xargs -0 chmod 664
+
+cd ../
+rm -fr ./install
+
+printf "Installing development dependencies...\n"
+npm install
+
+printf "Setup theme...\n"
+gulp
+
+cd ./public_html
+wp theme activate epiqk
+
+printf "Setting up git repository... \n"
+TOKEN=$(cat ~/.my.mini.token 2>/dev/null)
+curl --user Craigz0rs:$TOKEN https://api.github.com/user/repos -d '{"name":"'$BASENAME'","private": true}'
+cp ../_starter/wordpress/{.gitattributes,.gitignore} ./
+
+git init
+git add --all
+git commit -m "init project"
+git remote add origin https://github.com/Craigz0rs/$BASENAME.git
+git push -u origin master
+
+printf "Installer is all done!\n"
